@@ -1,0 +1,24 @@
+{
+  "_redirectEventId": undefined,
+  "apiKey": "AIzaSyBEiRq8ygwYM2uubCouNDN-R_oGVTMNfEs",
+  "appName": "[DEFAULT]",
+  "createdAt": "1770851474283",
+  "displayName": undefined,
+  "email": "hanna@gmail.com",
+  "emailVerified": false,
+  "isAnonymous": false,
+  "lastLoginAt": "1770858651228",
+  "phoneNumber": undefined,
+  "photoURL": undefined,
+  "providerData": [
+    [Object
+    ]
+  ],
+  "stsTokenManager": {
+    "accessToken": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjRiMTFjYjdhYjVmY2JlNDFlOTQ4MDk0ZTlkZjRjNWI1ZWNhMDAwOWUiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vc3NjLXRhc2tzIiwiYXVkIjoic3NjLXRhc2tzIiwiYXV0aF90aW1lIjoxNzcwODU4NjUxLCJ1c2VyX2lkIjoiRmVnVTF1ajV6a2dvVTQ4aTkwbnJRU0ViVHZKMyIsInN1YiI6IkZlZ1UxdWo1emtnb1U0OGk5MG5yUVNFYlR2SjMiLCJpYXQiOjE3NzA4NjIyODcsImV4cCI6MTc3MDg2NTg4NywiZW1haWwiOiJoYW5uYUBnbWFpbC5jb20iLCJlbWFpbF92ZXJpZmllZCI6ZmFsc2UsImZpcmViYXNlIjp7ImlkZW50aXRpZXMiOnsiZW1haWwiOlsiaGFubmFAZ21haWwuY29tIl19LCJzaWduX2luX3Byb3ZpZGVyIjoicGFzc3dvcmQifX0.dII-IvXYpKWe1wX-iyDTUYHrSFLbSoOdjeNTIgYRUV3zov_oMjOeTU-TYcmUuy7yVaLttmekIJ_pT5cOJjQsh6gi0tqKoWSXwK8HpM8zughTFL9iCWVbue_Kai_aiLtRiiiAPJKaieppxCBit7iAEMYMGon-3YOBWLISs0XRqMia4Dx3rr-2YDQtlKVHI7obDqJ35AnzGzn62QWskQTTnHa6wPOn1vLZ9i0soiz7CBs-0I0hnW5EyQnB_0Ld91k-vmuiMeQ0qLAnt_tVIx1B7rQVyAge1BTGpugWklJJaECU4wirs8ASykCtW6W2j_i1XEpkK64K6oinMnDXBttjTA",
+    "expirationTime": 1770865887076,
+    "refreshToken": "AMf-vBxLV7QFgT15EJZqe-9eu3uELOjQuZfniCHdzNsKD4hOZj7Z7yxZkW3t2lfS7puV47VDIEVMYXkZ0URFpcSZDp59XeZx4wKM6qAngabATzgC_n7vgBf4h3WXlhBH_gzZljTeyiEap9QcbMKcn4NNUXOwy56y01pfVr1cLiPPWq1n27GyjdmEMJEO-Nm_NNIquhfmeK7y"
+  },
+  "tenantId": undefined,
+  "uid": "FegU1uj5zkgoU48i90nrQSEbTvJ3"
+}

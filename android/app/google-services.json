@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "612327259711",
+    "project_id": "ssc-tasks",
+    "storage_bucket": "ssc-tasks.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:612327259711:android:76c790f8d3032fe9f3c28a",
+        "android_client_info": {
+          "package_name": "com.libyzxy0.ssctasks"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCarkOO8MCdVHK1lwhyuKXbFuCzyZsHPik"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
