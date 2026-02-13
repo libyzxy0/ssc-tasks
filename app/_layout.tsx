@@ -8,21 +8,43 @@ import { useColorScheme } from 'nativewind';
 import { getAuth, signOut } from 'firebase/auth';
 import { useEffect, useRef, useState } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
-import * as SystemUI from "expo-system-ui";
+import * as SystemUI from 'expo-system-ui';
 import { AuthProvider, type AuthUser } from '@/context/AuthContext';
-import { useRouter } from 'expo-router';
 import { useAuth } from '@/hooks/useAuth';
 import { db } from '@/FirebaseConfig';
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc } from 'firebase/firestore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { colorScheme as nativewindColorScheme } from 'nativewind';
 
 SplashScreen.preventAutoHideAsync();
-
 export { ErrorBoundary } from 'expo-router';
+
+const THEME_KEY = '@app_theme';
 
 export default function RootLayout() {
   const { colorScheme } = useColorScheme();
+  const [isThemeReady, setIsThemeReady] = useState(false);
 
-  SystemUI.setBackgroundColorAsync(NAV_THEME[colorScheme]['colors']['background']);
+  useEffect(() => {
+    (async () => {
+      try {
+        const saved = await AsyncStorage.getItem(THEME_KEY);
+        if (saved === 'dark' || saved === 'light') {
+          nativewindColorScheme.set(saved);
+        }
+      } catch (e) {
+        console.error('Failed to load theme:', e);
+      } finally {
+        setIsThemeReady(true);
+      }
+    })();
+  }, []);
+
+  if (!isThemeReady) return null;
+
+  SystemUI.setBackgroundColorAsync(
+    NAV_THEME[colorScheme]['colors']['background']
+  );
 
   return (
     <ThemeProvider value={NAV_THEME[colorScheme]}>
@@ -47,7 +69,7 @@ function RootLayoutNav() {
         if (!firebaseUser) {
           setUser(null);
         } else {
-          const docSnap = await getDoc(doc(db, "users", firebaseUser.uid));
+          const docSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
           if (!docSnap.exists()) {
             await signOut(auth);
             setUser(null);
@@ -56,13 +78,13 @@ function RootLayoutNav() {
           }
         }
       } catch (err) {
-        console.error("Auth error:", err);
+        console.error('Auth error:', err);
         setUser(null);
       } finally {
         if (!splashHidden.current) {
           splashHidden.current = true;
           setAppLoaded(true);
-          setIsAuthReady(true); // 👈 mark auth as resolved
+          setIsAuthReady(true);
         }
       }
     });

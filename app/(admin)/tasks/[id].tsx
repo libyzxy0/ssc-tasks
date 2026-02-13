@@ -82,7 +82,6 @@ const getInitials = (name: string) => {
 const formatDate = (timestamp: any) => {
   if (!timestamp) return 'N/A';
   
-  // Handle Firestore Timestamp
   const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   

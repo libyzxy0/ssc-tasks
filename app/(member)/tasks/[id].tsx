@@ -88,7 +88,6 @@ export default function TaskDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [isUpdating, setIsUpdating] = useState(false);
 
-  // Fetch task details from Firestore
   useEffect(() => {
     if (!id) {
       Alert.alert('Error', 'Invalid task ID');
@@ -108,7 +107,6 @@ export default function TaskDetailScreen() {
           
           setTask(taskData);
 
-          // Fetch assignee details
           if (taskData.assigneeUid) {
             try {
               const userRef = doc(db, 'users', taskData.assigneeUid);
@@ -164,6 +162,7 @@ export default function TaskDetailScreen() {
       await updateDoc(doc(db, 'tasks', task.id), {
         checklist: updatedChecklist,
         progress: newProgress,
+        status: newProgress !== 0 ? 'in-progress' : 'todo'
       });
     } catch (error) {
       console.error('Error updating checklist:', error);
@@ -171,7 +170,6 @@ export default function TaskDetailScreen() {
     }
   };
 
-  // Mark task as complete
   const markAsComplete = async () => {
     if (!task) return;
 
@@ -184,11 +182,6 @@ export default function TaskDetailScreen() {
         progress: newStatus === 'done' ? 100 : task.progress,
       });
       
-      Alert.alert(
-        'Success',
-        newStatus === 'done' ? 'Task marked as complete!' : 'Task reopened',
-        [{ text: 'OK' }]
-      );
     } catch (error) {
       console.error('Error updating task status:', error);
       Alert.alert('Error', 'Failed to update task status');
@@ -341,24 +334,6 @@ export default function TaskDetailScreen() {
                     </Text>
                   </TouchableOpacity>
                 ))}
-              </View>
-            </View>
-          )}
-
-          {task.progress !== undefined && task.status !== 'done' && (
-            <View className="bg-card rounded-2xl p-4 border border-border">
-              <SectionLabel label="Overall Progress" />
-              <View className="flex-row justify-between items-center mb-2">
-                <Text className="text-sm text-gray-600 dark:text-gray-300">
-                  Task Completion
-                </Text>
-                <Text className="text-sm font-bold text-primary">{task.progress}%</Text>
-              </View>
-              <View className="bg-border rounded-full h-2">
-                <View
-                  className="bg-primary rounded-full h-2"
-                  style={{ width: `${task.progress}%` }}
-                />
               </View>
             </View>
           )}

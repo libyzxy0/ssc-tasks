@@ -33,6 +33,16 @@ export default function TabLayout() {
                 }}
             />
             <Tabs.Screen
+                name="notifications"
+                options={{
+                    title: "Notifications",
+                    headerShown: false,
+                    tabBarIcon: ({ color }) => (
+                        <Ionicons size={22} style={{ marginBottom: -3, color }} name={'notifications'} />
+                    )
+                }}
+            />
+            <Tabs.Screen
                 name="tasks"
                 options={{
                     title: "Tasks",

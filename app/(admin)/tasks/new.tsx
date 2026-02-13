@@ -18,7 +18,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Modal,
   ActivityIndicator,
 } from 'react-native';
 import { useState, useEffect } from 'react';
@@ -28,6 +27,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColorScheme } from 'nativewind';
 import { db } from '@/FirebaseConfig';
 import { collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
+import { useAuth } from '@/hooks/useAuth'
+import { NotificationTemplates, sendNotification } from '@/utils/notifications'
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 type Priority = 'high' | 'medium' | 'low';
 type Status = 'todo' | 'in-progress' | 'done';
@@ -38,7 +40,7 @@ type TaskFormData = {
   priority: Priority;
   category: string;
   assignee: string;
-  assigneeUid: string; // Added UID field
+  assigneeUid: string;
   dueDate: string;
   status: Status;
   checklist: ChecklistItem[];
@@ -52,7 +54,7 @@ type ChecklistItem = {
 
 type TeamMember = {
   id: string;
-  uid: string; // Added UID field
+  uid: string;
   name: string;
 };
 
@@ -65,11 +67,6 @@ const CATEGORIES = [
   'Operations',
   'Events',
   'Other',
-];
-
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
 const FormField = ({
@@ -95,141 +92,8 @@ const FormField = ({
   </View>
 );
 
-const DatePickerModal = ({
-  visible,
-  onClose,
-  onSelect,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  onSelect: (date: string) => void;
-}) => {
-  const { colorScheme } = useColorScheme();
-  const iconColor = colorScheme === 'dark' ? '#cccccc' : '#0c0c0c';
-  const [selectedMonth, setSelectedMonth] = useState(7);
-  const [selectedDay, setSelectedDay] = useState(15);
-  const [selectedYear, setSelectedYear] = useState(2025);
-
-  const getDaysInMonth = (month: number, year: number) =>
-    new Date(year, month + 1, 0).getDate();
-
-  const daysInMonth = getDaysInMonth(selectedMonth, selectedYear);
-  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
-  const years = Array.from({ length: 10 }, (_, i) => 2025 + i);
-
-  return (
-    <Modal visible={visible} transparent animationType="slide">
-      <View className="flex-1 bg-black/50 justify-end">
-        <View className="bg-card rounded-t-3xl p-5">
-          <View className="flex-row justify-between items-center mb-4">
-            <Text className="text-lg font-bold text-gray-900 dark:text-white">
-              Select Date
-            </Text>
-            <TouchableOpacity onPress={onClose}>
-              <X size={24} color={iconColor} />
-            </TouchableOpacity>
-          </View>
-
-          <View className="flex-row justify-between items-center mb-6 gap-2">
-            <View className="flex-1">
-              <Text className="text-xs text-gray-500 mb-2 font-semibold">Month</Text>
-              <View className="border border-border rounded-lg bg-card/20 h-32 overflow-hidden">
-                <ScrollView showsVerticalScrollIndicator={false}>
-                  {MONTHS.map((month, idx) => (
-                    <TouchableOpacity
-                      key={idx}
-                      onPress={() => setSelectedMonth(idx)}
-                      className={`py-3 px-4 items-center ${
-                        selectedMonth === idx ? 'bg-primary/20' : 'bg-transparent'
-                      }`}
-                    >
-                      <Text
-                        className={`font-medium ${
-                          selectedMonth === idx
-                            ? 'text-primary font-bold'
-                            : 'text-gray-600 dark:text-gray-400'
-                        }`}
-                      >
-                        {month.slice(0, 3)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-            </View>
-
-            <View className="flex-1">
-              <Text className="text-xs text-gray-500 mb-2 font-semibold">Day</Text>
-              <View className="border border-border rounded-lg bg-card/20 h-32 overflow-hidden">
-                <ScrollView showsVerticalScrollIndicator={false}>
-                  {days.map((day) => (
-                    <TouchableOpacity
-                      key={day}
-                      onPress={() => setSelectedDay(day)}
-                      className={`py-3 px-4 items-center ${
-                        selectedDay === day ? 'bg-primary/20' : 'bg-transparent'
-                      }`}
-                    >
-                      <Text
-                        className={`font-medium ${
-                          selectedDay === day
-                            ? 'text-primary font-bold'
-                            : 'text-gray-600 dark:text-gray-400'
-                        }`}
-                      >
-                        {String(day).padStart(2, '0')}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-            </View>
-
-            <View className="flex-1">
-              <Text className="text-xs text-gray-500 mb-2 font-semibold">Year</Text>
-              <View className="border border-border rounded-lg bg-card/20 h-32 overflow-hidden">
-                <ScrollView showsVerticalScrollIndicator={false}>
-                  {years.map((year) => (
-                    <TouchableOpacity
-                      key={year}
-                      onPress={() => setSelectedYear(year)}
-                      className={`py-3 px-4 items-center ${
-                        selectedYear === year ? 'bg-primary/20' : 'bg-transparent'
-                      }`}
-                    >
-                      <Text
-                        className={`font-medium ${
-                          selectedYear === year
-                            ? 'text-primary font-bold'
-                            : 'text-gray-600 dark:text-gray-400'
-                        }`}
-                      >
-                        {year}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-            </View>
-          </View>
-
-          <TouchableOpacity
-            onPress={() => {
-              const formattedDate = `${MONTHS[selectedMonth].slice(0, 3)} ${selectedDay}`;
-              onSelect(formattedDate);
-              onClose();
-            }}
-            className="bg-primary py-3 rounded-lg items-center"
-          >
-            <Text className="text-white font-bold">Set Date</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-};
-
 export default function CreateTaskScreen() {
+  const { user } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colorScheme } = useColorScheme();
@@ -247,20 +111,20 @@ export default function CreateTaskScreen() {
     priority: 'medium',
     category: 'Administrative',
     assignee: '',
-    assigneeUid: '', // Initialize UID field
-    dueDate: 'Aug 10',
+    assigneeUid: '',
+    dueDate: '',
     status: 'todo',
     checklist: [],
   });
 
   const [checklistInput, setChecklistInput] = useState('');
   const [errors, setErrors] = useState<Partial<Record<keyof TaskFormData, string>>>({});
-  const [showDateModal, setShowDateModal] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(true);
 
-  // Fetch team members from Firebase
   useEffect(() => {
     const fetchTeamMembers = async () => {
       try {
@@ -270,19 +134,18 @@ export default function CreateTaskScreen() {
         
         const members: TeamMember[] = querySnapshot.docs.map((doc) => ({
           id: doc.id,
-          uid: doc.data().uid || doc.id, // Use uid field or fallback to doc.id
+          uid: doc.data().uid || doc.id,
           name: doc.data().firstname + " " + doc.data().lastname || 'Unknown Member',
         }));
 
         members.sort((a, b) => a.name.localeCompare(b.name));
-
         setTeamMembers(members);
         
         if (members.length > 0 && !formData.assignee) {
           setFormData(prev => ({ 
             ...prev, 
             assignee: members[0].name,
-            assigneeUid: members[0].uid // Set initial UID
+            assigneeUid: members[0].uid 
           }));
         }
       } catch (error) {
@@ -314,13 +177,13 @@ export default function CreateTaskScreen() {
     setIsSubmitting(true);
 
     try {
-      await addDoc(collection(db, 'tasks'), {
+      const newTask = await addDoc(collection(db, 'tasks'), {
         name: formData.name.trim(),
         description: formData.description.trim(),
         priority: formData.priority,
         category: formData.category,
         assignee: formData.assignee,
-        assigneeUid: formData.assigneeUid, // Include UID in task document
+        assigneeUid: formData.assigneeUid,
         dueDate: formData.dueDate,
         status: formData.status,
         checklist: formData.checklist,
@@ -328,9 +191,17 @@ export default function CreateTaskScreen() {
         updatedAt: serverTimestamp(),
       });
 
-      Alert.alert('Success', 'Task created successfully!', [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
+      const notifDetails = NotificationTemplates.taskAssigned(formData.name.trim(), user.firstname + " " + user.lastname);
+      
+      sendNotification(
+        formData.assigneeUid,
+        notifDetails.title,
+        notifDetails.message,
+        'task',
+        newTask.id
+      );
+
+      router.back();
     } catch (error) {
       console.error('Error creating task:', error);
       Alert.alert('Error', 'Failed to create task. Please try again.');
@@ -349,6 +220,7 @@ export default function CreateTaskScreen() {
       });
     }
   };
+
   const handleAssigneeChange = (memberName: string) => {
     const selectedMember = teamMembers.find(m => m.name === memberName);
     if (selectedMember) {
@@ -506,7 +378,7 @@ export default function CreateTaskScreen() {
 
           <FormField label="Due Date">
             <TouchableOpacity
-              onPress={() => setShowDateModal(true)}
+              onPress={() => setShowDatePicker(true)}
               className="flex-row items-center justify-between bg-card border border-border rounded-lg px-4 py-2.5 active:opacity-70"
             >
               <View className="flex-row items-center gap-2">
@@ -516,6 +388,22 @@ export default function CreateTaskScreen() {
                 </Text>
               </View>
             </TouchableOpacity>
+
+            {showDatePicker && (
+              <DateTimePicker
+                value={selectedDate}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(event, date) => {
+                  setShowDatePicker(Platform.OS === 'ios');
+                  if (date) {
+                    setSelectedDate(date);
+                    const formatted = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    updateForm('dueDate', formatted);
+                  }
+                }}
+              />
+            )}
           </FormField>
 
           <View className="mb-5">
@@ -579,12 +467,6 @@ export default function CreateTaskScreen() {
           </View>
         </View>
       </ScrollView>
-
-      <DatePickerModal
-        visible={showDateModal}
-        onClose={() => setShowDateModal(false)}
-        onSelect={(value) => updateForm('dueDate', value)}
-      />
     </KeyboardAvoidingView>
   );
 }

@@ -1,49 +1,44 @@
 import { Text } from '@/components/ui/text';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ScrollView, View, FlatList, TouchableOpacity } from 'react-native';
+import { ScrollView, View, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { getAuth, signOut } from 'firebase/auth';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'expo-router';
+import { db } from '@/FirebaseConfig'
+import { collection, onSnapshot } from "firebase/firestore";
+import { useState, useEffect } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
-const TASKS = [
-  { id: '1', name: 'Submit Q3 Report', priority: 'high', due: 'Today', done: false },
-  { id: '2', name: 'Review Budget Proposal', priority: 'medium', due: 'Tomorrow', done: false },
-  { id: '3', name: 'Update Member Directory', priority: 'low', due: 'Aug 10', done: true },
-  { id: '4', name: 'Prepare Meeting Agenda', priority: 'high', due: 'Aug 8', done: false },
-  { id: '5', name: 'Send Newsletter Draft', priority: 'medium', due: 'Aug 12', done: false },
-];
+type Task = {
+  id: string;
+  name: string;
+  priority: 'high' | 'medium' | 'low';
+  dueDate: string;
+  status: 'todo' | 'in-progress' | 'done';
+  assigneeUid: string;
+  progress: number;
+};
 
-const ANNOUNCEMENTS = [
-  {
-    id: '1',
-    title: 'General Assembly Reminder',
-    body: 'Monthly GA is scheduled for August 15. All officers are required to attend.',
-    date: 'Aug 5',
-    tag: 'Official',
-  },
-  {
-    id: '2',
-    title: 'New Portal Guidelines',
-    body: 'Please review the updated submission guidelines posted in the shared drive.',
-    date: 'Aug 3',
-    tag: 'Update',
-  },
-  {
-    id: '3',
-    title: 'Welcome New Members!',
-    body: '12 new members joined SSC this semester. Reach out and make them feel welcome.',
-    date: 'Aug 1',
-    tag: 'Community',
-  },
-];
+type Announcement = {
+  id: string;
+  title: string;
+  body: string;
+  createdAt: any;
+  tag: string;
+  readBy: string[];
+};
 
-const ACTIVITY = [
-  { id: '1', text: 'Update Member Directory marked done', time: '2h ago' },
-  { id: '2', text: 'Budget Proposal task was assigned to you', time: '5h ago' },
-  { id: '3', text: 'New announcement posted by Admin', time: 'Yesterday' },
-  { id: '4', text: 'Leadership Summit added to calendar', time: 'Aug 4' },
-];
+type Notification = {
+  id: string;
+  title: string;
+  message: string;
+  createdAt: any;
+  read: boolean;
+  type: string;
+  actionId?: string;
+  userId: string;
+};
 
 const SectionHeader = ({
   title,
@@ -57,19 +52,19 @@ const SectionHeader = ({
   <View className="flex-row justify-between items-center mb-3">
     <Text className="text-base font-bold text-gray-800 dark:text-white">{title}</Text>
     {actionLabel && (
-      <TouchableOpacity onPress={onAction}>
+      <TouchableOpacity activeOpacity={0.7} onPress={onAction}>
         <Text className="text-xs text-primary font-medium">{actionLabel}</Text>
       </TouchableOpacity>
     )}
   </View>
 );
 
-const TaskCard = ({ name, priority, due, done }: (typeof TASKS)[0]) => (
+const TaskCard = ({ name, priority, dueDate, status, progress }: Task) => (
   <View className="bg-card rounded-2xl p-4 mr-3 w-44 border border-border">
     <View className="flex-row items-center gap-2 mb-2">
       <View
         className={`w-2 h-2 rounded-full ${
-          done
+          status === 'done'
             ? 'bg-gray-300'
             : priority === 'high'
             ? 'bg-red-400'
@@ -80,7 +75,7 @@ const TaskCard = ({ name, priority, due, done }: (typeof TASKS)[0]) => (
       />
       <Text
         className={`text-xs font-semibold uppercase tracking-wide ${
-          done
+          status === 'done'
             ? 'text-gray-400'
             : priority === 'high'
             ? 'text-red-400'
@@ -89,43 +84,162 @@ const TaskCard = ({ name, priority, due, done }: (typeof TASKS)[0]) => (
             : 'text-green-500'
         }`}
       >
-        {done ? 'Done' : priority}
+        {status === 'done' ? 'Done' : priority}
       </Text>
     </View>
     <Text
       className={`text-sm font-semibold mb-2 ${
-        done ? 'text-gray-400 dark:text-gray-600 line-through' : 'text-gray-800 dark:text-white'
+        status === 'done' ? 'text-gray-400 dark:text-gray-600 line-through' : 'text-gray-800 dark:text-white'
       }`}
       numberOfLines={2}
     >
       {name}
     </Text>
-    <Text className="text-xs text-gray-400">Due {due}</Text>
+    <Text className="text-xs text-gray-400">Due {dueDate}</Text>
+    {progress > 0 && progress < 100 && (
+      <View className="mt-2">
+        <View className="bg-gray-200 dark:bg-gray-700 rounded-full h-1">
+          <View
+            className="bg-primary rounded-full h-1"
+            style={{ width: `${progress}%` }}
+          />
+        </View>
+      </View>
+    )}
   </View>
 );
 
-const AnnouncementCard = ({ title, body, date, tag }: (typeof ANNOUNCEMENTS)[0]) => (
-  <View className="bg-card rounded-2xl p-4 mb-3 border border-border">
-    <View className="flex-row justify-between items-center mb-2">
-      <View className="bg-blue-50 dark:bg-blue-950 px-2 py-0.5 rounded-md">
-        <Text className="text-xs font-semibold text-primary">{tag}</Text>
+const formatDate = (timestamp: any) => {
+  if (!timestamp) return '';
+  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  const now = new Date();
+  const diffTime = Math.abs(now.getTime() - date.getTime());
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+
+const formatTimeAgo = (timestamp: any) => {
+  if (!timestamp) return '';
+  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  const now = new Date();
+  const diffTime = Math.abs(now.getTime() - date.getTime());
+  const diffMinutes = Math.floor(diffTime / (1000 * 60));
+  const diffHours = Math.floor(diffTime / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+
+const AnnouncementCard = ({ id, title, body, createdAt, tag, readBy, currentUserId }: Announcement & { currentUserId: string }) => {
+  const router = useRouter();
+  const isUnread = !readBy?.includes(currentUserId);
+  
+  return (
+    <TouchableOpacity 
+      activeOpacity={0.7}
+      onPress={() => router.push(`/announcements/${id}`)}
+      className="bg-card rounded-2xl p-4 mb-3 border border-border"
+    >
+      <View className="flex-row justify-between items-center mb-2">
+        <View className="bg-blue-50 dark:bg-blue-950 px-2 py-0.5 rounded-md">
+          <Text className="text-xs font-semibold text-primary">{tag}</Text>
+        </View>
+        <View className="flex-row items-center gap-2">
+          <Text className="text-xs text-gray-400">{formatDate(createdAt)}</Text>
+          {isUnread && (
+            <View className="w-2 h-2 rounded-full bg-sky-500" />
+          )}
+        </View>
       </View>
-      <Text className="text-xs text-gray-400">{date}</Text>
-    </View>
-    <Text className="text-sm font-bold text-gray-800 dark:text-white mb-1">{title}</Text>
-    <Text className="text-xs text-gray-500 leading-5" numberOfLines={2}>
-      {body}
-    </Text>
-  </View>
-);
+      <Text className="text-sm font-bold text-gray-800 dark:text-white mb-1">{title}</Text>
+      <Text className="text-xs text-gray-500 leading-5" numberOfLines={2}>
+        {body}
+      </Text>
+    </TouchableOpacity>
+  );
+};
 
 export default function HomeScreen() {
   const router = useRouter();
   const auth = getAuth();
   const { user, setUser } = useAuth();
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const completedTasks = TASKS.filter((t) => t.done).length;
-  const totalTasks = TASKS.length;
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const unsubscribeTasks = onSnapshot(collection(db, 'tasks'), (snapshot) => {
+      const allTasks = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Task[];
+
+      const userTasks = allTasks
+        .filter(task => task.assigneeUid === user.uid)
+        .slice(0, 5);
+      
+      setTasks(userTasks);
+    });
+
+    const unsubscribeAnnouncements = onSnapshot(collection(db, 'announcements'), (snapshot) => {
+      const allAnnouncements = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Announcement[];
+      
+      const sortedAnnouncements = allAnnouncements
+        .sort((a, b) => {
+          const aTime = a.createdAt?.toDate?.() || new Date(0);
+          const bTime = b.createdAt?.toDate?.() || new Date(0);
+          return bTime.getTime() - aTime.getTime();
+        })
+        .slice(0, 3);
+      
+      setAnnouncements(sortedAnnouncements);
+      setLoading(false);
+    });
+
+    const unsubscribeNotifications = onSnapshot(collection(db, 'notifications'), (snapshot) => {
+      const allNotifications = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Notification[];
+      
+      const userNotifications = allNotifications
+        .filter(notif => notif.userId === user.uid)
+        .sort((a, b) => {
+          const aTime = a.createdAt?.toDate?.() || new Date(0);
+          const bTime = b.createdAt?.toDate?.() || new Date(0);
+          return bTime.getTime() - aTime.getTime();
+        })
+        .slice(0, 4);
+      
+      setNotifications(userNotifications);
+    });
+
+    return () => {
+      unsubscribeTasks();
+      unsubscribeAnnouncements();
+      unsubscribeNotifications();
+    };
+  }, [user?.uid]);
+
+  const completedTasks = tasks.filter((t) => t.status === 'done').length;
+  const totalTasks = tasks.length;
+  const unreadAnnouncements = announcements.filter(a => !a.readBy?.includes(user?.uid || '')).length;
 
   const handleSignout = async () => {
     try {
@@ -161,81 +275,156 @@ export default function HomeScreen() {
             <Text className="text-white text-xl font-bold">
               {user?.firstname ?? 'Officer'}
             </Text>
-            <Text className="text-sky-200 text-xs mt-0.5">SSC Task Dashboard</Text>
+            <Text className="text-sky-200 text-xs mt-0.5">{user?.position || 'SSC Member'}</Text>
           </View>
           <TouchableOpacity
-            onPress={handleSignout}
             activeOpacity={0.7}
-            className="bg-white/20 px-4 py-2 rounded-full border border-white/30"
+            onPress={() => router.push('/settings')}
           >
-            <Text className="text-white text-xs font-semibold">Sign Out</Text>
+            <Ionicons name="settings-outline" size={24} color="white" />
           </TouchableOpacity>
         </View>
 
-        <View className="bg-white/20 rounded-xl p-3 mt-4">
-          <View className="flex-row justify-between mb-2">
-            <Text className="text-white text-xs font-medium">Weekly Progress</Text>
-            <Text className="text-white text-xs font-bold">
-              {completedTasks}/{totalTasks} tasks
-            </Text>
-          </View>
-          <View className="bg-white/30 rounded-full h-1.5">
-            <View
-              className="bg-white rounded-full h-1.5"
-              style={{ width: `${(completedTasks / totalTasks) * 100}%` }}
-            />
-          </View>
-        </View>
-      </View>
-
-      <View className="px-5 mt-5 gap-6">
-        <View>
-          <SectionHeader
-            title="Assigned Tasks"
-            actionLabel="View All"
-            onAction={() => router.push('/tasks')}
-          />
-          <FlatList
-            data={TASKS}
-            horizontal
-            renderItem={({ item }) => <TaskCard {...item} />}
-            keyExtractor={(item) => item.id}
-            showsHorizontalScrollIndicator={false}
-          />
-        </View>
-
-        <View>
-          <SectionHeader
-            title="Announcements"
-            actionLabel="See All"
-            onAction={() => router.push('/announcements')}
-          />
-          {ANNOUNCEMENTS.map((a) => (
-            <AnnouncementCard key={a.id} {...a} />
-          ))}
-        </View>
-
-        <View>
-          <SectionHeader
-            title="Recent Activity"
-            actionLabel="History"
-            onAction={() => router.push('/activity')}
-          />
-          <View className="bg-background rounded-2xl border border-border overflow-hidden">
-            {ACTIVITY.map((item, index) => (
+        {totalTasks > 0 && (
+          <View className="bg-white/20 rounded-xl p-3 mt-4">
+            <View className="flex-row justify-between mb-2">
+              <Text className="text-white text-xs font-medium">Task Progress</Text>
+              <Text className="text-white text-xs font-bold">
+                {completedTasks}/{totalTasks} tasks
+              </Text>
+            </View>
+            <View className="bg-white/30 rounded-full h-1.5">
               <View
-                key={item.id}
-                className={`flex-row items-center px-4 py-3 gap-3 ${
-                  index < ACTIVITY.length - 1 ? 'border-b border-border/50' : ''
-                }`}
-              >
-                <Text className="flex-1 text-xs text-gray-600 leading-5">{item.text}</Text>
-                <Text className="text-xs text-gray-400 shrink-0">{item.time}</Text>
+                className="bg-white rounded-full h-1.5"
+                style={{ width: `${totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0}%` }}
+              />
+            </View>
+          </View>
+        )}
+      </View>
+
+      {loading ? (
+        <View className="px-5 mt-5 gap-4">
+          <Skeleton className="h-36 w-full rounded-2xl" />
+          <Skeleton className="h-48 w-full rounded-2xl" />
+        </View>
+      ) : (
+        <View className="px-5 mt-5 gap-6">
+          {/* Tasks Section */}
+          {tasks.length > 0 && (
+            <View>
+              <SectionHeader
+                title="Your Tasks"
+                actionLabel="View All"
+                onAction={() => router.push('/tasks')}
+              />
+              <FlatList
+                data={tasks}
+                horizontal
+                renderItem={({ item }) => <TaskCard {...item} />}
+                keyExtractor={(item) => item.id}
+                showsHorizontalScrollIndicator={false}
+              />
+            </View>
+          )}
+
+          {/* Announcements Section */}
+          <View>
+            <View className="flex-row justify-between items-center mb-3">
+              <View className="flex-row items-center gap-2">
+                <Text className="text-base font-bold text-gray-800 dark:text-white">Announcements</Text>
+                {unreadAnnouncements > 0 && (
+                  <View className="bg-sky-500 rounded-full w-5 h-5 items-center justify-center">
+                    <Text className="text-white text-xs font-bold">{unreadAnnouncements}</Text>
+                  </View>
+                )}
               </View>
-            ))}
+              <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => router.push('/announcements')}>
+                <Text className="text-xs text-primary font-medium">See All</Text>
+              </TouchableOpacity>
+            </View>
+            
+            {announcements.length > 0 ? (
+              announcements.map((a) => (
+                <AnnouncementCard key={a.id} {...a} currentUserId={user?.uid || ''} />
+              ))
+            ) : (
+              <View className="bg-card rounded-2xl p-8 border border-border items-center">
+                <Text className="text-4xl mb-2">📭</Text>
+                <Text className="text-sm text-gray-500">No announcements yet</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Empty State for Tasks */}
+          {tasks.length === 0 && (
+            <View className="bg-card rounded-2xl p-8 border border-border items-center">
+              <Text className="text-4xl mb-2">✅</Text>
+              <Text className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1">No tasks assigned</Text>
+              <Text className="text-xs text-gray-500">You're all caught up!</Text>
+            </View>
+          )}
+
+          {/* Recent Notifications */}
+          <View>
+            <View className="flex-row justify-between items-center mb-3">
+              <View className="flex-row items-center gap-2">
+                <Text className="text-base font-bold text-gray-800 dark:text-white">Recent Notifications</Text>
+                {notifications.filter(n => !n.read).length > 0 && (
+                  <View className="bg-red-500 rounded-full w-5 h-5 items-center justify-center">
+                    <Text className="text-white text-xs font-bold">
+                      {notifications.filter(n => !n.read).length}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => router.push('/notifications')}>
+                <Text className="text-xs text-primary font-medium">View All</Text>
+              </TouchableOpacity>
+            </View>
+            
+            {notifications.length > 0 ? (
+              <View className="bg-card rounded-2xl border border-border overflow-hidden">
+                {notifications.map((item, index) => (
+                  <TouchableOpacity
+                    key={item.id}
+                    onPress={() => router.push('/notifications')}
+                    className={`flex-row items-start px-4 py-3 gap-3 ${
+                      index < notifications.length - 1 ? 'border-b border-border/50' : ''
+                    } ${!item.read ? 'bg-sky-50 dark:bg-sky-950' : ''}`}
+                  >
+                    <View className="flex-1">
+                      <Text className="text-sm font-semibold text-gray-800 dark:text-white mb-0.5">
+                        {item.title}
+                      </Text>
+                      <Text className="text-xs text-gray-600 dark:text-gray-300 leading-5">
+                        {item.message}
+                      </Text>
+                    </View>
+                    <View className="items-end gap-1">
+                      <Text className="text-xs text-gray-400 shrink-0">
+                        {formatTimeAgo(item.createdAt)}
+                      </Text>
+                      {!item.read && (
+                        <View className="w-2 h-2 rounded-full bg-sky-500" />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <View className="bg-card rounded-2xl p-8 border border-border items-center">
+                <Text className="text-4xl mb-2">🔔</Text>
+                <Text className="text-sm text-gray-500">No notifications</Text>
+              </View>
+            )}
           </View>
         </View>
-      </View>
+      )}
     </ScrollView>
   );
 }

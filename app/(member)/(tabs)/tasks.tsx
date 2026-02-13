@@ -206,7 +206,6 @@ export default function TasksScreen() {
     }
 
     const tasksRef = collection(db, 'tasks');
-    // Query tasks where assigneeUid matches the current user's UID
     const q = query(tasksRef, where('assigneeUid', '==', currentUser.uid));
 
     const unsubscribe = onSnapshot(

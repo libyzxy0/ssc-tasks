@@ -54,8 +54,8 @@ export function SignupForm() {
   }
 
   return (
-    <View className="gap-6">
-      <Card className="border-border/0 sm:border-border shadow-none sm:shadow-sm sm:shadow-black/5">
+    <View className="gap-6 bg-background">
+      <Card className="bg-background border-border/0 sm:border-border shadow-none sm:shadow-sm sm:shadow-black/5">
         <CardHeader>
           <CardTitle className="text-center text-xl sm:text-left">Create Member Account</CardTitle>
           <CardDescription className="text-center sm:text-left">
@@ -106,7 +106,7 @@ export function SignupForm() {
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
-                placeholder="hanna@gmail.com"
+                placeholder="butthanna7@gmail.com"
                 keyboardType="email-address"
                 autoComplete="email"
                 autoCapitalize="none"

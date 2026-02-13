@@ -21,6 +21,7 @@ export function SocialConnections() {
       {SOCIAL_CONNECTION_STRATEGIES.map((strategy) => {
         return (
           <Button
+            disabled
             key={strategy.type}
             variant="outline"
             size="sm"
