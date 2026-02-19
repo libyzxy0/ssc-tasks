@@ -260,7 +260,7 @@
 					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.libyzxy0.ssctasks";
-				PRODUCT_NAME = "ssctasks";
+				PRODUCT_NAME = "SSCTaskTracker";
 				SWIFT_OBJC_BRIDGING_HEADER = "ssctasks/ssctasks-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -289,7 +289,7 @@
 					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.libyzxy0.ssctasks";
-				PRODUCT_NAME = "ssctasks";
+				PRODUCT_NAME = "SSCTaskTracker";
 				SWIFT_OBJC_BRIDGING_HEADER = "ssctasks/ssctasks-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";

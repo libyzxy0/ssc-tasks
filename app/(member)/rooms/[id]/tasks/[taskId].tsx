@@ -1,0 +1,737 @@
+import { Text } from '@/components/ui/text';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ScrollView, View, TouchableOpacity, Alert, ActivityIndicator, Modal } from 'react-native';
+import { useAuth } from '@/hooks/useAuth';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useState, useEffect } from 'react';
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  collection,
+  getDocs,
+} from 'firebase/firestore';
+import { db } from '@/FirebaseConfig';
+import * as ImagePicker from 'expo-image-picker';
+import { uploadImage } from '@/utils/upload';
+import { Image } from 'expo-image';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Priority = 'low' | 'medium' | 'high';
+
+const PRIORITY_CONFIG: Record<Priority, { label: string; color: string; bg: string; dot: string }> = {
+  low:    { label: 'Low',    color: '#22c55e', bg: 'bg-green-50 dark:bg-green-950/50',  dot: 'bg-green-500'  },
+  medium: { label: 'Medium', color: '#f59e0b', bg: 'bg-amber-50 dark:bg-amber-950/50',  dot: 'bg-amber-400'  },
+  high:   { label: 'High',   color: '#ef4444', bg: 'bg-red-50 dark:bg-red-950/50',      dot: 'bg-red-500'    },
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const formatTimestamp = (ts: any): string => {
+  if (!ts) return '—';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+};
+
+const getDueStatus = (dueDate: string | null) => {
+  if (!dueDate) return null;
+  const d = new Date(dueDate);
+  if (isNaN(d.getTime())) return null;
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  const diff = Math.round((d.getTime() - now.getTime()) / 86400000);
+  if (diff < 0)   return { label: `${Math.abs(diff)} day${Math.abs(diff) !== 1 ? 's' : ''} overdue`, color: '#ef4444', icon: 'alert-circle-outline' };
+  if (diff === 0) return { label: 'Due today',    color: '#f59e0b', icon: 'time-outline'     };
+  if (diff === 1) return { label: 'Due tomorrow', color: '#f59e0b', icon: 'time-outline'     };
+  return           { label: `Due in ${diff} days`, color: '#6b7280', icon: 'calendar-outline' };
+};
+
+// ─── Small components ─────────────────────────────────────────────────────────
+
+const InfoRow = ({ icon, label, children }: { icon: string; label: string; children: React.ReactNode }) => (
+  <View className="flex-row items-start gap-3 py-3 border-b border-border last:border-0">
+    <View className="w-8 h-8 rounded-xl bg-gray-100 dark:bg-gray-800 items-center justify-center mt-0.5">
+      <Ionicons name={icon as any} size={15} color="#6b7280" />
+    </View>
+    <View className="flex-1">
+      <Text className="text-xs text-gray-400 mb-0.5">{label}</Text>
+      {children}
+    </View>
+  </View>
+);
+
+const Avatar = ({ name, size = 32 }: { name: string; size?: number }) => {
+  const letter  = (name || '?')[0].toUpperCase();
+  const palette = ['#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444'];
+  const color   = palette[letter.charCodeAt(0) % palette.length];
+  return (
+    <View
+      style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color + '22' }}
+      className="items-center justify-center"
+    >
+      <Text style={{ color, fontSize: size * 0.38, fontWeight: '700' }}>{letter}</Text>
+    </View>
+  );
+};
+
+// ─── Proof of Completion Modal ────────────────────────────────────────────────
+
+type ProofModalProps = {
+  visible: boolean;
+  onClose: () => void;
+  onSubmit: (localUri: string) => Promise<void>;
+  uploading: boolean;
+};
+
+const ProofModal = ({ visible, onClose, onSubmit, uploading }: ProofModalProps) => {
+  const [pickedUri, setPickedUri] = useState<string | null>(null);
+
+  const handlePick = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow access to your photo library.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setPickedUri(result.assets[0].uri);
+    }
+  };
+
+  const handleCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow camera access.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setPickedUri(result.assets[0].uri);
+    }
+  };
+
+  const handleConfirm = async () => {
+    if (!pickedUri) return;
+    await onSubmit(pickedUri);
+    setPickedUri(null);
+  };
+
+  const handleClose = () => {
+    setPickedUri(null);
+    onClose();
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
+      <View className="flex-1 bg-black/50 justify-end">
+        <View className="bg-background rounded-t-3xl px-5 pt-5 pb-10">
+          {/* Handle */}
+          <View className="w-10 h-1 rounded-full bg-gray-300 dark:bg-gray-600 self-center mb-5" />
+
+          <Text className="text-base font-bold text-gray-800 dark:text-white mb-1">
+            Proof of Completion
+          </Text>
+          <Text className="text-xs text-gray-400 mb-5">
+            Upload a photo as proof before marking this task complete.
+          </Text>
+
+          {/* Preview */}
+          {pickedUri ? (
+            <View className="mb-4 rounded-2xl overflow-hidden border border-border">
+              <Image
+                source={{ uri: pickedUri }}
+                style={{ width: '100%', height: 200 }}
+                contentFit="cover"
+              />
+              <TouchableOpacity
+                onPress={() => setPickedUri(null)}
+                activeOpacity={0.8}
+                className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/60 items-center justify-center"
+              >
+                <Ionicons name="close" size={16} color="white" />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            /* Pick buttons */
+            <View className="flex-row gap-3 mb-4">
+              <TouchableOpacity
+                onPress={handleCamera}
+                activeOpacity={0.8}
+                className="flex-1 bg-card border border-border rounded-2xl py-5 items-center gap-2"
+              >
+                <Ionicons name="camera-outline" size={26} color="#6366f1" />
+                <Text className="text-xs font-semibold text-gray-600 dark:text-gray-300">Camera</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handlePick}
+                activeOpacity={0.8}
+                className="flex-1 bg-card border border-border rounded-2xl py-5 items-center gap-2"
+              >
+                <Ionicons name="image-outline" size={26} color="#6366f1" />
+                <Text className="text-xs font-semibold text-gray-600 dark:text-gray-300">Gallery</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Actions */}
+          <TouchableOpacity
+            onPress={handleConfirm}
+            disabled={!pickedUri || uploading}
+            activeOpacity={0.8}
+            className={`rounded-2xl py-4 items-center flex-row justify-center gap-2 mb-3 ${
+              pickedUri && !uploading ? 'bg-primary' : 'bg-gray-200 dark:bg-gray-700'
+            }`}
+          >
+            {uploading ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <Ionicons name="checkmark-circle-outline" size={18} color={pickedUri ? 'white' : '#9ca3af'} />
+            )}
+            <Text className={`font-bold text-sm ${pickedUri && !uploading ? 'text-white' : 'text-gray-400'}`}>
+              {uploading ? 'Uploading…' : 'Submit & Complete'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={handleClose} activeOpacity={0.7} className="items-center py-2">
+            <Text className="text-sm text-gray-400 font-medium">Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+// ─── Proof Viewer Modal ───────────────────────────────────────────────────────
+
+const ProofViewerModal = ({ visible, uri, onClose }: { visible: boolean; uri: string; onClose: () => void }) => (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <View className="flex-1 bg-black/90 items-center justify-center p-5">
+      <TouchableOpacity
+        onPress={onClose}
+        activeOpacity={0.8}
+        className="absolute top-14 right-5 w-10 h-10 rounded-full bg-white/10 items-center justify-center z-10"
+      >
+        <Ionicons name="close" size={20} color="white" />
+      </TouchableOpacity>
+      <Image
+        source={{ uri }}
+        style={{ width: '100%', height: '70%', borderRadius: 16 }}
+        contentFit="contain"
+      />
+    </View>
+  </Modal>
+);
+
+// ─── Main Screen ──────────────────────────────────────────────────────────────
+
+export default function MemberTaskDetailScreen() {
+  const router = useRouter();
+  const { user } = useAuth();
+  const { id: roomId, taskId } = useLocalSearchParams<{ id: string; taskId: string }>();
+
+  const [task, setTask]           = useState<any>(null);
+  const [members, setMembers]     = useState<any[]>([]);
+  const [roomName, setRoomName]   = useState('');
+  const [loading, setLoading]     = useState(true);
+  const [toggling, setToggling]   = useState(false);
+
+  // Proof state
+  const [proofModalVisible, setProofModalVisible]   = useState(false);
+  const [viewerVisible, setViewerVisible]           = useState(false);
+  const [uploadingProof, setUploadingProof]         = useState(false);
+
+  useEffect(() => {
+    if (!roomId || !taskId) return;
+    fetchData();
+  }, [roomId, taskId]);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const roomSnap = await getDoc(doc(db, 'rooms', roomId));
+      if (roomSnap.exists()) setRoomName(roomSnap.data().name || '');
+
+      const taskSnap = await getDoc(doc(db, 'rooms', roomId, 'tasks', taskId));
+      if (taskSnap.exists()) setTask({ id: taskSnap.id, ...taskSnap.data() });
+
+      const membersSnap = await getDocs(collection(db, 'rooms', roomId, 'members'));
+      setMembers(membersSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    } catch (e) {
+      console.error('Error fetching task:', e);
+    }
+    setLoading(false);
+  };
+
+  const isAssignedToMe = task?.assignees?.includes(user?.uid);
+
+  // ── Called when user taps "Mark as Complete" ─────────────────────────────
+  const handleMarkComplete = () => {
+    // If already completed → reopen directly (no proof needed)
+    if (task.completed) {
+      handleReopen();
+      return;
+    }
+    // Require proof before completing
+    setProofModalVisible(true);
+  };
+
+  // ── Upload proof photo then mark task complete ────────────────────────────
+  const handleProofSubmit = async (localUri: string) => {
+    setUploadingProof(true);
+    try {
+      const uploadData = await uploadImage(localUri);
+      if (!uploadData?.url) {
+        Alert.alert('Upload failed', 'Could not upload photo. Please try again.');
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const updates = {
+        completed: true,
+        proof_url: uploadData.url,
+        proof_submitted_at: now,
+        proof_submitted_by: user?.uid ?? null,
+      };
+
+      await updateDoc(doc(db, 'rooms', roomId, 'tasks', taskId), updates);
+      setTask((prev: any) => ({ ...prev, ...updates }));
+      setProofModalVisible(false);
+    } catch (e) {
+      console.error('Proof upload error:', e);
+      Alert.alert('Error', 'Failed to submit proof. Please try again.');
+    } finally {
+      setUploadingProof(false);
+    }
+  };
+
+  // ── Reopen task — clear proof fields ─────────────────────────────────────
+  const handleReopen = () => {
+    Alert.alert(
+      'Reopen Task?',
+      'This will mark the task as pending and remove the proof of completion.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reopen',
+          style: 'destructive',
+          onPress: async () => {
+            setToggling(true);
+            const updates = {
+              completed: false,
+              proof_url: null,
+              proof_submitted_at: null,
+              proof_submitted_by: null,
+            };
+            try {
+              await updateDoc(doc(db, 'rooms', roomId, 'tasks', taskId), updates);
+              setTask((prev: any) => ({ ...prev, ...updates }));
+            } catch (e) {
+              Alert.alert('Error', 'Could not reopen task.');
+            }
+            setToggling(false);
+          },
+        },
+      ]
+    );
+  };
+
+  // ── Loading ───────────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <View className="flex-1 bg-background p-5 pt-safe my-5">
+        <Skeleton className="h-8 w-48 rounded-xl mb-5" />
+        <Skeleton className="h-20 w-full rounded-2xl mb-3" />
+        <Skeleton className="h-40 w-full rounded-2xl mb-3" />
+        <Skeleton className="h-32 w-full rounded-2xl" />
+      </View>
+    );
+  }
+
+  if (!task) {
+    return (
+      <View className="flex-1 bg-background items-center justify-center gap-3 p-5">
+        <Ionicons name="alert-circle-outline" size={40} color="#9ca3af" />
+        <Text className="text-sm text-gray-400 text-center">Task not found</Text>
+        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} className="bg-primary rounded-xl px-5 py-2">
+          <Text className="text-white font-medium text-sm">Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const pCfg           = PRIORITY_CONFIG[task.priority as Priority] ?? PRIORITY_CONFIG.medium;
+  const dueStatus      = getDueStatus(task.dueDate);
+  const assignedMembers = members.filter((m) => task.assignees?.includes(m.id));
+  const hasProof       = !!task.proof_url;
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  return (
+    <View className="flex-1 bg-background my-5">
+
+      {/* Proof upload modal */}
+      <ProofModal
+        visible={proofModalVisible}
+        onClose={() => setProofModalVisible(false)}
+        onSubmit={handleProofSubmit}
+        uploading={uploadingProof}
+      />
+
+      {/* Proof photo full-screen viewer */}
+      {hasProof && (
+        <ProofViewerModal
+          visible={viewerVisible}
+          uri={task.proof_url}
+          onClose={() => setViewerVisible(false)}
+        />
+      )}
+
+      {/* Header */}
+      <View className="flex-row items-center gap-3 px-5 pt-safe pb-4 border-b border-border bg-background">
+        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+          <Ionicons name="arrow-back" size={22} color="#6b7280" />
+        </TouchableOpacity>
+        <View className="flex-1">
+          <Text className="text-base font-bold text-gray-800 dark:text-white" numberOfLines={1}>
+            Task Details
+          </Text>
+          {roomName ? (
+            <Text className="text-xs text-gray-400">{roomName}</Text>
+          ) : null}
+        </View>
+        {!isAssignedToMe && (
+          <View className="bg-gray-100 dark:bg-gray-800 rounded-xl px-2.5 py-1 flex-row items-center gap-1">
+            <Ionicons name="eye-outline" size={12} color="#9ca3af" />
+            <Text className="text-xs text-gray-400">View only</Text>
+          </View>
+        )}
+      </View>
+
+      <ScrollView
+        className="flex-1"
+        contentContainerClassName="p-5 pb-16 gap-4"
+        showsVerticalScrollIndicator={false}
+      >
+
+        {/* Status banner */}
+        <TouchableOpacity
+          onPress={isAssignedToMe ? handleMarkComplete : undefined}
+          activeOpacity={isAssignedToMe ? 0.75 : 1}
+          className={`flex-row items-center gap-3 rounded-2xl p-4 border ${
+            task.completed
+              ? 'bg-green-50 dark:bg-green-950/40 border-green-200 dark:border-green-900'
+              : isAssignedToMe
+              ? 'bg-primary/5 border-primary/20'
+              : 'bg-card border-border'
+          }`}
+        >
+          <View
+            className={`w-7 h-7 rounded-full border-2 items-center justify-center ${
+              task.completed
+                ? 'bg-green-500 border-green-500'
+                : isAssignedToMe
+                ? 'border-primary/60'
+                : 'border-gray-300 dark:border-gray-600'
+            }`}
+          >
+            {task.completed && <Ionicons name="checkmark" size={14} color="white" />}
+          </View>
+
+          <View className="flex-1">
+            <Text
+              className={`text-sm font-bold ${
+                task.completed
+                  ? 'text-green-700 dark:text-green-400'
+                  : isAssignedToMe
+                  ? 'text-primary'
+                  : 'text-gray-700 dark:text-gray-300'
+              }`}
+            >
+              {task.completed
+                ? 'Completed'
+                : isAssignedToMe
+                ? 'Mark as complete'
+                : 'Pending'}
+            </Text>
+            <Text className="text-xs text-gray-400 mt-0.5">
+              {task.completed
+                ? isAssignedToMe ? 'Tap to reopen' : 'This task is done'
+                : isAssignedToMe
+                ? 'A photo proof is required to complete this task'
+                : 'Waiting to be completed'}
+            </Text>
+          </View>
+
+          {isAssignedToMe && (
+            <Ionicons
+              name={task.completed ? 'checkmark-circle' : 'ellipse-outline'}
+              size={22}
+              color={task.completed ? '#22c55e' : '#6366f1'}
+            />
+          )}
+        </TouchableOpacity>
+
+        {/* "Assigned to me" callout */}
+        {isAssignedToMe && !task.completed && (
+          <View className="flex-row items-center gap-2 bg-primary/10 rounded-xl px-3 py-2.5">
+            <Ionicons name="camera-outline" size={15} color="#6366f1" />
+            <Text className="text-xs font-semibold text-primary flex-1">
+              Upload a photo proof to mark this task as complete.
+            </Text>
+          </View>
+        )}
+
+        {/* Title & description */}
+        <View className="bg-card border border-border rounded-2xl p-4 gap-2">
+          <Text className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Task</Text>
+          <Text
+            className={`text-base font-bold ${
+              task.completed
+                ? 'line-through text-gray-400 dark:text-gray-500'
+                : 'text-gray-800 dark:text-white'
+            }`}
+          >
+            {task.title}
+          </Text>
+          {task.description ? (
+            <Text className="text-sm text-gray-600 dark:text-gray-400 leading-5">
+              {task.description}
+            </Text>
+          ) : (
+            <Text className="text-sm text-gray-300 dark:text-gray-600 italic">No description</Text>
+          )}
+        </View>
+
+        {/* ── Proof of Completion Card ── */}
+        <View className="bg-card border border-border rounded-2xl overflow-hidden">
+          <View className="flex-row items-center gap-2 px-4 py-3 border-b border-border">
+            <Ionicons name="image-outline" size={15} color={hasProof ? '#22c55e' : '#9ca3af'} />
+            <Text className="text-xs font-bold uppercase tracking-wider text-gray-400">
+              Proof of Completion
+            </Text>
+            {hasProof && (
+              <View className="ml-auto bg-green-50 dark:bg-green-950/50 rounded-full px-2 py-0.5">
+                <Text className="text-xs font-semibold text-green-600 dark:text-green-400">Submitted</Text>
+              </View>
+            )}
+          </View>
+
+          {hasProof ? (
+            <View>
+              {/* Tappable photo */}
+              <TouchableOpacity activeOpacity={0.9} onPress={() => setViewerVisible(true)}>
+                <Image
+                  source={{ uri: task.proof_url }}
+                  style={{ width: '100%', height: 200 }}
+                  contentFit="cover"
+                />
+                {/* Tap-to-expand hint */}
+                <View className="absolute bottom-2 right-2 bg-black/50 rounded-lg px-2 py-1 flex-row items-center gap-1">
+                  <Ionicons name="expand-outline" size={11} color="white" />
+                  <Text className="text-white text-xs">Tap to expand</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Meta info */}
+              <View className="px-4 py-3 gap-1">
+                {task.proof_submitted_at ? (
+                  <View className="flex-row items-center gap-1.5">
+                    <Ionicons name="time-outline" size={12} color="#9ca3af" />
+                    <Text className="text-xs text-gray-400">
+                      Submitted on{' '}
+                      {new Date(task.proof_submitted_at).toLocaleDateString('en-US', {
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                    </Text>
+                  </View>
+                ) : null}
+                {task.proof_submitted_by ? (
+                  <View className="flex-row items-center gap-1.5">
+                    <Ionicons name="person-outline" size={12} color="#9ca3af" />
+                    <Text className="text-xs text-gray-400">
+                      By{' '}
+                      {task.proof_submitted_by === user?.uid
+                        ? 'you'
+                        : members.find((m) => m.id === task.proof_submitted_by)?.displayName ?? 'a member'}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+          ) : (
+            <View className="px-4 py-6 items-center gap-2">
+              <View className="w-12 h-12 rounded-2xl bg-gray-100 dark:bg-gray-800 items-center justify-center">
+                <Ionicons name="camera-outline" size={22} color="#9ca3af" />
+              </View>
+              <Text className="text-sm text-gray-400 text-center">
+                No proof submitted yet
+              </Text>
+              {isAssignedToMe && (
+                <Text className="text-xs text-gray-300 dark:text-gray-600 text-center">
+                  A photo will appear here once the task is marked complete.
+                </Text>
+              )}
+            </View>
+          )}
+        </View>
+
+        {/* Details */}
+        <View className="bg-card border border-border rounded-2xl px-4">
+          {/* Priority */}
+          <InfoRow icon="flag-outline" label="Priority">
+            <View className={`self-start flex-row items-center gap-1.5 px-2.5 py-1 rounded-lg mt-0.5 ${pCfg.bg}`}>
+              <View className={`w-2 h-2 rounded-full ${pCfg.dot}`} />
+              <Text className="text-sm font-semibold" style={{ color: pCfg.color }}>
+                {pCfg.label}
+              </Text>
+            </View>
+          </InfoRow>
+
+          {/* Due date */}
+          <InfoRow icon="calendar-outline" label="Due Date">
+            {task.dueDate ? (
+              <View className="mt-0.5">
+                <Text className="text-sm font-medium text-gray-800 dark:text-white">{task.dueDate}</Text>
+                {dueStatus && (
+                  <View className="flex-row items-center gap-1 mt-0.5">
+                    <Ionicons name={dueStatus.icon as any} size={11} color={dueStatus.color} />
+                    <Text className="text-xs font-medium" style={{ color: dueStatus.color }}>
+                      {dueStatus.label}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            ) : (
+              <Text className="text-sm text-gray-300 dark:text-gray-600 italic mt-0.5">No due date</Text>
+            )}
+          </InfoRow>
+
+          {/* Created */}
+          <InfoRow icon="time-outline" label="Created">
+            <Text className="text-sm font-medium text-gray-800 dark:text-white mt-0.5">
+              {formatTimestamp(task.createdAt)}
+            </Text>
+          </InfoRow>
+
+          {/* Assignees */}
+          <View className="py-3">
+            <View className="flex-row items-center gap-3 mb-2">
+              <View className="w-8 h-8 rounded-xl bg-gray-100 dark:bg-gray-800 items-center justify-center">
+                <Ionicons name="people-outline" size={15} color="#6b7280" />
+              </View>
+              <Text className="text-xs text-gray-400">Assignees</Text>
+            </View>
+            {assignedMembers.length > 0 ? (
+              <View className="flex-row flex-wrap gap-2 ml-11">
+                {assignedMembers.map((m) => (
+                  <View
+                    key={m.id}
+                    className={`flex-row items-center gap-2 rounded-xl px-3 py-1.5 border ${
+                      m.id === user?.uid
+                        ? 'bg-primary/10 border-primary/20'
+                        : 'bg-background border-border'
+                    }`}
+                  >
+                    <Avatar name={m.displayName || m.email} size={22} />
+                    <Text className={`text-xs font-medium ${m.id === user?.uid ? 'text-primary' : 'text-gray-700 dark:text-gray-300'}`}>
+                      {m.id === user?.uid ? 'You' : (m.displayName || m.email)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text className="text-sm text-gray-300 dark:text-gray-600 italic ml-11">Unassigned</Text>
+            )}
+          </View>
+        </View>
+
+        {/* Info */}
+        <View className="bg-card border border-border rounded-2xl p-4 gap-1">
+          <Text className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Info</Text>
+          <View className="flex-row justify-between items-center py-1 border-b border-border">
+            <Text className="text-xs text-gray-400">Status</Text>
+            <View className={`flex-row items-center gap-1.5 px-2 py-0.5 rounded-md ${
+              task.completed
+                ? 'bg-green-50 dark:bg-green-950/50'
+                : 'bg-amber-50 dark:bg-amber-950/50'
+            }`}>
+              <View className={`w-1.5 h-1.5 rounded-full ${task.completed ? 'bg-green-500' : 'bg-amber-400'}`} />
+              <Text className={`text-xs font-semibold ${
+                task.completed
+                  ? 'text-green-600 dark:text-green-400'
+                  : 'text-amber-600 dark:text-amber-400'
+              }`}>
+                {task.completed ? 'Completed' : 'Pending'}
+              </Text>
+            </View>
+          </View>
+          <View className="flex-row justify-between items-center py-1 border-b border-border">
+            <Text className="text-xs text-gray-400">Proof</Text>
+            <View className={`flex-row items-center gap-1.5 px-2 py-0.5 rounded-md ${
+              hasProof
+                ? 'bg-green-50 dark:bg-green-950/50'
+                : 'bg-gray-100 dark:bg-gray-800'
+            }`}>
+              <Ionicons
+                name={hasProof ? 'checkmark-circle' : 'ellipse-outline'}
+                size={11}
+                color={hasProof ? '#22c55e' : '#9ca3af'}
+              />
+              <Text className={`text-xs font-semibold ${hasProof ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}`}>
+                {hasProof ? 'Submitted' : 'Not yet'}
+              </Text>
+            </View>
+          </View>
+          <View className="flex-row justify-between items-center py-1">
+            <Text className="text-xs text-gray-400">Your role</Text>
+            <Text className="text-xs font-medium text-gray-600 dark:text-gray-400">
+              {isAssignedToMe ? 'Assigned to you' : 'View only'}
+            </Text>
+          </View>
+        </View>
+
+      </ScrollView>
+
+      {/* Bottom CTA for assigned tasks */}
+      {isAssignedToMe && (
+        <View className="px-5 pb-safe pt-3 border-t border-border bg-background">
+          <TouchableOpacity
+            onPress={handleMarkComplete}
+            disabled={toggling || uploadingProof}
+            activeOpacity={0.8}
+            className={`rounded-2xl py-4 items-center flex-row justify-center gap-2 ${
+              task.completed ? 'bg-gray-200 dark:bg-gray-700' : 'bg-primary'
+            } ${toggling || uploadingProof ? 'opacity-50' : ''}`}
+          >
+            <Ionicons
+              name={task.completed ? 'arrow-undo-outline' : 'camera-outline'}
+              size={20}
+              color={task.completed ? '#6b7280' : 'white'}
+            />
+            <Text className={`font-bold text-sm ${task.completed ? 'text-gray-700 dark:text-gray-300' : 'text-white'}`}>
+              {toggling
+                ? 'Updating…'
+                : task.completed
+                ? 'Reopen Task'
+                : 'Upload Proof & Complete'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+    </View>
+  );
+}

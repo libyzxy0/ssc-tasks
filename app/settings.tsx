@@ -14,7 +14,7 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/hooks/useTheme';
-
+import { Image } from 'expo-image'
 const SectionHeader = ({ title }: { title: string }) => (
   <View className="mb-3">
     <Text className="text-xs font-semibold uppercase tracking-widest text-gray-400">
@@ -60,9 +60,8 @@ const SettingRow = ({
 
       <View className="flex-1">
         <Text
-          className={`text-sm font-medium ${
-            danger ? 'text-red-500' : 'text-gray-800 dark:text-white'
-          }`}
+          className={`text-sm font-medium ${danger ? 'text-red-500' : 'text-gray-800 dark:text-white'
+            }`}
         >
           {label}
         </Text>
@@ -167,11 +166,25 @@ export default function SettingsScreen() {
           activeOpacity={0.85}
           className="bg-card rounded-2xl p-4 border border-border flex-row items-center gap-4"
         >
-          <View className="w-14 h-14 rounded-full bg-primary items-center justify-center">
-            <Text className="text-white text-xl font-bold">
-              {user?.firstname?.charAt(0).toUpperCase() ?? 'U'}
-            </Text>
-          </View>
+
+          {user?.photo_url ? (
+            <Image 
+            source={{ uri: user?.photo_url }}
+            style={{
+              width: 60,
+              height: 60,
+              borderRadius: 80
+            }}
+            contentFit="cover"
+            />
+          ) : (
+            <View className="w-14 h-14 rounded-full bg-primary items-center justify-center">
+              <Text className="text-white text-xl font-bold">
+                {user?.firstname?.charAt(0).toUpperCase() ?? 'U'}
+              </Text>
+            </View>
+          )}
+          
           <View className="flex-1">
             <Text className="text-base font-bold text-gray-800 dark:text-white">
               {(user?.firstname ?? '') + ' ' + (user?.lastname ?? '') || 'Officer'}
@@ -200,7 +213,7 @@ export default function SettingsScreen() {
               label="Privacy & Security"
               sublabel="Password, account access"
               onPress={() => {}}
-            />
+            /> 
             <SettingRow
               iconName="globe-outline"
               iconBg="bg-cyan-100 dark:bg-cyan-950"
@@ -208,7 +221,7 @@ export default function SettingsScreen() {
               label="Language"
               sublabel="English (US)"
               onPress={() => {}}
-              isLast
+              isLast 
             />
           </View>
         </View>
@@ -269,8 +282,7 @@ export default function SettingsScreen() {
                   ? 'Checking...'
                   : updateStatus === 'latest'
                   ? "You're up to date"
-                  : 'Version 1.0.0'
-              }
+                    : 'Version 1.0.0'}
               onPress={handleCheckUpdate}
               showChevron={false}
               right={updateRight}
@@ -282,7 +294,7 @@ export default function SettingsScreen() {
               label="Rate the App"
               sublabel="Leave us a review"
               onPress={() => {}}
-            />
+            /> 
             <SettingRow
               iconName="chatbubble-outline"
               iconBg="bg-teal-100 dark:bg-teal-950"
@@ -290,7 +302,7 @@ export default function SettingsScreen() {
               label="Send Feedback"
               sublabel="Help us improve"
               onPress={() => {}}
-              isLast
+              isLast 
             />
           </View>
         </View>
@@ -306,7 +318,7 @@ export default function SettingsScreen() {
               label="About App"
               sublabel="Licenses, credits"
               onPress={() => {}}
-            />
+            /> 
             <View className="ml-16 border-b border-border" />
             <View className="px-4 py-3.5 gap-2">
               {[
@@ -327,7 +339,7 @@ export default function SettingsScreen() {
               iconColor="#9333ea"
               label="Terms & Privacy"
               onPress={() => {}}
-              isLast
+              isLast 
             />
           </View>
         </View>

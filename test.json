@@ -1,0 +1,24 @@
+{
+  "apiKey": "AIzaSyBEiRq8ygwYM2uubCouNDN-R_oGVTMNfEs",
+  "appName": "[DEFAULT]",
+  "authDomain": "ssc-tasks.firebaseapp.com",
+  "currentUser": {
+    "_redirectEventId": undefined,
+    "apiKey": "AIzaSyBEiRq8ygwYM2uubCouNDN-R_oGVTMNfEs",
+    "appName": "[DEFAULT]",
+    "createdAt": "1771157494591",
+    "displayName": undefined,
+    "email": "butthanna7@gmail.com",
+    "emailVerified": false,
+    "isAnonymous": false,
+    "lastLoginAt": "1771158798582",
+    "phoneNumber": undefined,
+    "photoURL": undefined,
+    "providerData": [Array
+    ],
+    "stsTokenManager": [Object
+    ],
+    "tenantId": undefined,
+    "uid": "3uMOGTxZi0VJIT13N63r3cnVfvq1"
+  }
+}

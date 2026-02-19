@@ -104,6 +104,7 @@ function RootLayoutNav() {
       <Stack.Screen name="(member)" />
       <Stack.Screen name="signin" />
       <Stack.Screen name="signup" />
+      <Stack.Screen name="verify-email" />
     </Stack>
   );
 }

@@ -1,0 +1,736 @@
+import { Text } from '@/components/ui/text';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  ScrollView,
+  View,
+  TouchableOpacity,
+  TextInput,
+  Alert,
+  Modal,
+  FlatList,
+} from 'react-native';
+import { useAuth } from '@/hooks/useAuth';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useState, useEffect } from 'react';
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  deleteDoc,
+  collection,
+  getDocs,
+  serverTimestamp,
+} from 'firebase/firestore';
+import { db } from '@/FirebaseConfig';
+import { Image } from 'expo-image';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Priority = 'low' | 'medium' | 'high';
+
+type Task = {
+  id: string;
+  title: string;
+  description: string;
+  priority: Priority;
+  dueDate: string | null;
+  assignees: string[];
+  completed: boolean;
+  createdBy: string;
+  createdAt: any;
+  // Proof fields
+  proof_url: string | null;
+  proof_submitted_at: string | null;
+  proof_submitted_by: string | null;
+};
+
+type Member = {
+  id: string;
+  displayName: string;
+  email: string;
+  role: string;
+};
+
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+const PRIORITY_CONFIG: Record<Priority, { label: string; color: string; bg: string; darkBg: string; dot: string }> = {
+  low:    { label: 'Low',    color: '#22c55e', bg: 'bg-green-50',  darkBg: 'dark:bg-green-950', dot: 'bg-green-500' },
+  medium: { label: 'Medium', color: '#f59e0b', bg: 'bg-amber-50',  darkBg: 'dark:bg-amber-950', dot: 'bg-amber-400' },
+  high:   { label: 'High',   color: '#ef4444', bg: 'bg-red-50',    darkBg: 'dark:bg-red-950',   dot: 'bg-red-500'   },
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const formatTimestamp = (ts: any): string => {
+  if (!ts) return '—';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+};
+
+const getDueStatus = (dueDate: string | null): { label: string; color: string; icon: string } | null => {
+  if (!dueDate) return null;
+  const d = new Date(dueDate);
+  if (isNaN(d.getTime())) return null;
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  const diff = Math.round((d.getTime() - now.getTime()) / 86400000);
+  if (diff < 0)  return { label: `${Math.abs(diff)} day${Math.abs(diff) !== 1 ? 's' : ''} overdue`, color: '#ef4444', icon: 'alert-circle-outline' };
+  if (diff === 0) return { label: 'Due today',    color: '#f59e0b', icon: 'time-outline' };
+  if (diff === 1) return { label: 'Due tomorrow', color: '#f59e0b', icon: 'time-outline' };
+  return { label: `Due in ${diff} days`, color: '#6b7280', icon: 'calendar-outline' };
+};
+
+// ─── Small reusable pieces ────────────────────────────────────────────────────
+
+const SectionLabel = ({ children }: { children: string }) => (
+  <Text className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">{children}</Text>
+);
+
+const InfoRow = ({ icon, label, children }: { icon: string; label: string; children: React.ReactNode }) => (
+  <View className="flex-row items-start gap-3 py-3 border-b border-border">
+    <View className="w-8 h-8 rounded-xl bg-gray-100 dark:bg-gray-800 items-center justify-center mt-0.5">
+      <Ionicons name={icon as any} size={15} color="#6b7280" />
+    </View>
+    <View className="flex-1">
+      <Text className="text-xs text-gray-400 mb-0.5">{label}</Text>
+      {children}
+    </View>
+  </View>
+);
+
+const Avatar = ({ name, size = 36 }: { name: string; size?: number }) => {
+  const letter = (name || '?')[0].toUpperCase();
+  const palette = ['#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444'];
+  const color = palette[letter.charCodeAt(0) % palette.length];
+  return (
+    <View
+      style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color + '22' }}
+      className="items-center justify-center"
+    >
+      <Text style={{ color, fontSize: size * 0.38, fontWeight: '700' }}>{letter}</Text>
+    </View>
+  );
+};
+
+// ─── Proof Viewer Modal ───────────────────────────────────────────────────────
+
+const ProofViewerModal = ({ visible, uri, onClose }: { visible: boolean; uri: string; onClose: () => void }) => (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <View className="flex-1 bg-black/90 items-center justify-center p-5">
+      <TouchableOpacity
+        onPress={onClose}
+        activeOpacity={0.8}
+        className="absolute top-14 right-5 w-10 h-10 rounded-full bg-white/10 items-center justify-center z-10"
+      >
+        <Ionicons name="close" size={20} color="white" />
+      </TouchableOpacity>
+      <Image
+        source={{ uri }}
+        style={{ width: '100%', height: '70%', borderRadius: 16 }}
+        contentFit="contain"
+      />
+    </View>
+  </Modal>
+);
+
+// ─── Main Screen ──────────────────────────────────────────────────────────────
+
+export default function TaskDetailsScreen() {
+  const router = useRouter();
+  const { user } = useAuth();
+  const { id, taskId } = useLocalSearchParams<{ id: string; taskId: string }>();
+
+  const [task, setTask]       = useState<Task | null>(null);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving,  setSaving]  = useState(false);
+
+  // Edit mode
+  const [editing,         setEditing]         = useState(false);
+  const [editTitle,       setEditTitle]       = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editPriority,    setEditPriority]    = useState<Priority>('medium');
+  const [editDueDate,     setEditDueDate]     = useState('');
+
+  // Assignee modal
+  const [assigneeModalVisible,  setAssigneeModalVisible]  = useState(false);
+  const [selectedAssignees,     setSelectedAssignees]     = useState<string[]>([]);
+
+  // Delete modal
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+
+  // Proof viewer
+  const [viewerVisible, setViewerVisible] = useState(false);
+
+  // ── Fetch ────────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!id || !taskId) return;
+    fetchData();
+  }, [id, taskId]);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const taskSnap = await getDoc(doc(db, 'rooms', id, 'tasks', taskId));
+      if (taskSnap.exists()) {
+        const data = { id: taskSnap.id, ...taskSnap.data() } as Task;
+        setTask(data);
+        setEditTitle(data.title);
+        setEditDescription(data.description || '');
+        setEditPriority(data.priority || 'medium');
+        setEditDueDate(data.dueDate || '');
+        setSelectedAssignees(data.assignees || []);
+      }
+
+      const membersSnap = await getDocs(collection(db, 'rooms', id, 'members'));
+      setMembers(membersSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Member)));
+    } catch (e) {
+      console.error('Error fetching task:', e);
+    }
+    setLoading(false);
+  };
+
+  // ── Toggle complete ───────────────────────────────────────────────────────
+
+  const handleToggleComplete = async () => {
+    if (!task) return;
+    const next = !task.completed;
+    setTask({ ...task, completed: next });
+    try {
+      await updateDoc(doc(db, 'rooms', id, 'tasks', taskId), { completed: next });
+    } catch (e) {
+      setTask({ ...task, completed: task.completed });
+      Alert.alert('Error', 'Could not update task.');
+    }
+  };
+
+  // ── Save edits ────────────────────────────────────────────────────────────
+
+  const handleSave = async () => {
+    if (!editTitle.trim()) {
+      Alert.alert('Error', 'Task title is required.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const updates = {
+        title:       editTitle.trim(),
+        description: editDescription.trim(),
+        priority:    editPriority,
+        dueDate:     editDueDate.trim() || null,
+        assignees:   selectedAssignees,
+        updatedAt:   serverTimestamp(),
+      };
+      await updateDoc(doc(db, 'rooms', id, 'tasks', taskId), updates);
+      setTask((prev) => prev ? { ...prev, ...updates } : prev);
+      setEditing(false);
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Error', 'Failed to save changes.');
+    }
+    setSaving(false);
+  };
+
+  // ── Delete ────────────────────────────────────────────────────────────────
+
+  const handleDelete = async () => {
+    try {
+      await deleteDoc(doc(db, 'rooms', id, 'tasks', taskId));
+      router.back();
+    } catch (e) {
+      Alert.alert('Error', 'Failed to delete task.');
+    }
+  };
+
+  // ── Assignee helpers ──────────────────────────────────────────────────────
+
+  const toggleAssignee = (uid: string) => {
+    setSelectedAssignees((prev) =>
+      prev.includes(uid) ? prev.filter((id) => id !== uid) : [...prev, uid]
+    );
+  };
+
+  const assignedMembers = members.filter((m) => task?.assignees?.includes(m.id));
+
+  // ── Loading ───────────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <View className="flex-1 bg-background p-5 pt-safe">
+        <Skeleton className="h-8 w-48 rounded-xl mb-5" />
+        <Skeleton className="h-24 w-full rounded-2xl mb-3" />
+        <Skeleton className="h-40 w-full rounded-2xl mb-3" />
+        <Skeleton className="h-32 w-full rounded-2xl" />
+      </View>
+    );
+  }
+
+  if (!task) {
+    return (
+      <View className="flex-1 bg-background items-center justify-center gap-3">
+        <Ionicons name="alert-circle-outline" size={40} color="#9ca3af" />
+        <Text className="text-sm text-gray-400">Task not found</Text>
+        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} className="bg-primary rounded-xl px-5 py-2">
+          <Text className="text-white font-medium text-sm">Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const pCfg      = PRIORITY_CONFIG[task.priority] ?? PRIORITY_CONFIG.medium;
+  const dueStatus = getDueStatus(task.dueDate);
+  const hasProof  = !!task.proof_url;
+
+  const submittedByName = task.proof_submitted_by
+    ? members.find((m) => m.id === task.proof_submitted_by)?.displayName
+      ?? members.find((m) => m.id === task.proof_submitted_by)?.email
+      ?? 'Unknown member'
+    : null;
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  return (
+    <View className="flex-1 bg-background">
+
+      {/* Proof photo full-screen viewer */}
+      {hasProof && (
+        <ProofViewerModal
+          visible={viewerVisible}
+          uri={task.proof_url!}
+          onClose={() => setViewerVisible(false)}
+        />
+      )}
+
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <View className="flex-row items-center gap-3 px-5 pt-safe pb-4 border-b border-border bg-background mt-5">
+        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+          <Ionicons name="arrow-back" size={22} color="#6b7280" />
+        </TouchableOpacity>
+        <Text className="text-base font-bold text-gray-800 dark:text-white flex-1" numberOfLines={1}>
+          Task Details
+        </Text>
+        <View className="flex-row gap-2">
+          {editing ? (
+            <>
+              <TouchableOpacity
+                onPress={() => setEditing(false)}
+                activeOpacity={0.7}
+                className="bg-gray-100 dark:bg-gray-800 rounded-full px-3 py-1.5"
+              >
+                <Text className="text-sm font-medium text-gray-600 dark:text-gray-400">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleSave}
+                disabled={saving}
+                activeOpacity={0.7}
+                className={`bg-primary rounded-full px-4 py-1.5 ${saving ? 'opacity-50' : ''}`}
+              >
+                <Text className="text-sm font-semibold text-white">{saving ? 'Saving…' : 'Save'}</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <TouchableOpacity
+                onPress={() => setEditing(true)}
+                activeOpacity={0.7}
+                className="bg-gray-100 dark:bg-gray-800 rounded-xl p-2"
+              >
+                <Ionicons name="create-outline" size={18} color="#6b7280" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setDeleteModalVisible(true)}
+                activeOpacity={0.7}
+                className="bg-red-50 dark:bg-red-950 rounded-xl p-2"
+              >
+                <Ionicons name="trash-outline" size={18} color="#ef4444" />
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      </View>
+
+      <ScrollView
+        className="flex-1"
+        contentContainerClassName="p-5 pb-12 gap-4"
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+
+        {/* ── Task card ───────────────────────────────────────────────── */}
+        <View className="bg-card border border-border rounded-2xl p-4 gap-3">
+          <SectionLabel>Task</SectionLabel>
+
+          {editing ? (
+            <>
+              <View>
+                <Text className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Title *</Text>
+                <TextInput
+                  value={editTitle}
+                  onChangeText={setEditTitle}
+                  placeholder="Task title"
+                  className="bg-background border border-border rounded-xl px-4 py-3 text-sm text-gray-800 dark:text-white"
+                  placeholderTextColor="#9ca3af"
+                />
+              </View>
+              <View>
+                <Text className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Description</Text>
+                <TextInput
+                  value={editDescription}
+                  onChangeText={setEditDescription}
+                  placeholder="Add more details…"
+                  multiline
+                  numberOfLines={4}
+                  className="bg-background border border-border rounded-xl px-4 py-3 text-sm text-gray-800 dark:text-white"
+                  style={{ textAlignVertical: 'top', minHeight: 90 }}
+                  placeholderTextColor="#9ca3af"
+                />
+              </View>
+            </>
+          ) : (
+            <>
+              <Text className={`text-base font-bold ${task.completed ? 'line-through text-gray-400' : 'text-gray-800 dark:text-white'}`}>
+                {task.title}
+              </Text>
+              {task.description ? (
+                <Text className="text-sm text-gray-600 dark:text-gray-400 leading-5">
+                  {task.description}
+                </Text>
+              ) : (
+                <Text className="text-sm text-gray-300 dark:text-gray-600 italic">No description</Text>
+              )}
+            </>
+          )}
+        </View>
+
+        {/* ── Proof of Completion (read-only) ─────────────────────────── */}
+        <View className="bg-card border border-border rounded-2xl overflow-hidden">
+          <View className="flex-row items-center gap-2 px-4 py-3 border-b border-border">
+            <Ionicons name="image-outline" size={15} color={hasProof ? '#22c55e' : '#9ca3af'} />
+            <Text className="text-xs font-bold uppercase tracking-wider text-gray-400">
+              Proof of Completion
+            </Text>
+            {/* Read-only badge */}
+            <View className="ml-auto flex-row items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-full px-2 py-0.5">
+              <Ionicons name="eye-outline" size={11} color="#9ca3af" />
+              <Text className="text-xs text-gray-400">View only</Text>
+            </View>
+            {hasProof && (
+              <View className="bg-green-50 dark:bg-green-950/50 rounded-full px-2 py-0.5 ml-1">
+                <Text className="text-xs font-semibold text-green-600 dark:text-green-400">Submitted</Text>
+              </View>
+            )}
+          </View>
+
+          {hasProof ? (
+            <View>
+              {/* Tappable photo */}
+              <TouchableOpacity activeOpacity={0.9} onPress={() => setViewerVisible(true)}>
+                <Image
+                  source={{ uri: task.proof_url! }}
+                  style={{ width: '100%', height: 220 }}
+                  contentFit="cover"
+                />
+                <View className="absolute bottom-2 right-2 bg-black/50 rounded-lg px-2 py-1 flex-row items-center gap-1">
+                  <Ionicons name="expand-outline" size={11} color="white" />
+                  <Text className="text-white text-xs">Tap to expand</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Meta info */}
+              <View className="px-4 py-3 gap-1.5">
+                {task.proof_submitted_at ? (
+                  <View className="flex-row items-center gap-1.5">
+                    <Ionicons name="time-outline" size={12} color="#9ca3af" />
+                    <Text className="text-xs text-gray-400">
+                      Submitted on{' '}
+                      {new Date(task.proof_submitted_at).toLocaleDateString('en-US', {
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                    </Text>
+                  </View>
+                ) : null}
+                {submittedByName ? (
+                  <View className="flex-row items-center gap-1.5">
+                    <Ionicons name="person-outline" size={12} color="#9ca3af" />
+                    <Text className="text-xs text-gray-400">By {submittedByName}</Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+          ) : (
+            <View className="px-4 py-6 items-center gap-2">
+              <View className="w-12 h-12 rounded-2xl bg-gray-100 dark:bg-gray-800 items-center justify-center">
+                <Ionicons name="camera-outline" size={22} color="#9ca3af" />
+              </View>
+              <Text className="text-sm text-gray-400 text-center">No proof submitted yet</Text>
+              <Text className="text-xs text-gray-300 dark:text-gray-600 text-center">
+                A photo will appear here once the assigned member marks the task complete.
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* ── Details card ────────────────────────────────────────────── */}
+        <View className="bg-card border border-border rounded-2xl px-4">
+          <SectionLabel> </SectionLabel>
+
+          {/* Priority */}
+          <InfoRow icon="flag-outline" label="Priority">
+            {editing ? (
+              <View className="flex-row gap-2 mt-1">
+                {(Object.keys(PRIORITY_CONFIG) as Priority[]).map((p) => {
+                  const cfg = PRIORITY_CONFIG[p];
+                  const active = editPriority === p;
+                  return (
+                    <TouchableOpacity
+                      key={p}
+                      onPress={() => setEditPriority(p)}
+                      activeOpacity={0.7}
+                      className={`flex-1 flex-row items-center justify-center gap-1 py-2 rounded-xl border-2 ${
+                        active ? 'border-primary bg-primary/10' : 'border-border bg-background'
+                      }`}
+                    >
+                      <View className={`w-2 h-2 rounded-full ${cfg.dot}`} />
+                      <Text className={`text-xs font-semibold ${active ? 'text-primary' : 'text-gray-500'}`}>
+                        {cfg.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : (
+              <View className={`self-start flex-row items-center gap-1.5 px-2.5 py-1 rounded-lg mt-0.5 ${pCfg.bg} ${pCfg.darkBg}`}>
+                <View className={`w-2 h-2 rounded-full ${pCfg.dot}`} />
+                <Text className="text-sm font-semibold" style={{ color: pCfg.color }}>
+                  {pCfg.label}
+                </Text>
+              </View>
+            )}
+          </InfoRow>
+
+          {/* Due date */}
+          <InfoRow icon="calendar-outline" label="Due Date">
+            {editing ? (
+              <TextInput
+                value={editDueDate}
+                onChangeText={setEditDueDate}
+                placeholder="MM/DD/YYYY"
+                className="bg-background border border-border rounded-xl px-3 py-2 text-sm text-gray-800 dark:text-white mt-1"
+                placeholderTextColor="#9ca3af"
+              />
+            ) : task.dueDate ? (
+              <View className="mt-0.5">
+                <Text className="text-sm font-medium text-gray-800 dark:text-white">{task.dueDate}</Text>
+                {dueStatus && (
+                  <View className="flex-row items-center gap-1 mt-0.5">
+                    <Ionicons name={dueStatus.icon as any} size={11} color={dueStatus.color} />
+                    <Text className="text-xs font-medium" style={{ color: dueStatus.color }}>
+                      {dueStatus.label}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            ) : (
+              <Text className="text-sm text-gray-300 dark:text-gray-600 italic mt-0.5">No due date</Text>
+            )}
+          </InfoRow>
+
+          {/* Created */}
+          <InfoRow icon="time-outline" label="Created">
+            <Text className="text-sm font-medium text-gray-800 dark:text-white mt-0.5">
+              {formatTimestamp(task.createdAt)}
+            </Text>
+          </InfoRow>
+
+          {/* Assignees */}
+          <View className="py-3">
+            <View className="flex-row items-center gap-3 mb-2">
+              <View className="w-8 h-8 rounded-xl bg-gray-100 dark:bg-gray-800 items-center justify-center">
+                <Ionicons name="people-outline" size={15} color="#6b7280" />
+              </View>
+              <Text className="text-xs text-gray-400">Assignees</Text>
+              {editing && (
+                <TouchableOpacity
+                  onPress={() => setAssigneeModalVisible(true)}
+                  activeOpacity={0.7}
+                  className="ml-auto bg-primary/10 rounded-lg px-2.5 py-1"
+                >
+                  <Text className="text-xs font-semibold text-primary">Edit</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {assignedMembers.length > 0 ? (
+              <View className="flex-row flex-wrap gap-2 ml-11">
+                {assignedMembers.map((m) => (
+                  <View key={m.id} className="flex-row items-center gap-2 bg-background border border-border rounded-xl px-3 py-1.5">
+                    <Avatar name={m.displayName || m.email} size={22} />
+                    <Text className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                      {m.displayName || m.email}
+                    </Text>
+                    {editing && (
+                      <TouchableOpacity onPress={() => toggleAssignee(m.id)} hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
+                        <Ionicons name="close-circle" size={14} color="#9ca3af" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text className="text-sm text-gray-300 dark:text-gray-600 italic ml-11">
+                {editing ? 'Tap Edit to assign members' : 'Unassigned'}
+              </Text>
+            )}
+          </View>
+        </View>
+
+        {/* ── Info card ───────────────────────────────────────────────── */}
+        <View className="bg-card border border-border rounded-2xl p-4 gap-2">
+          <SectionLabel>Info</SectionLabel>
+          <View className="flex-row justify-between items-center py-1">
+            <Text className="text-xs text-gray-400">Task ID</Text>
+            <Text className="text-xs font-mono text-gray-500 dark:text-gray-400">{task.id.slice(0, 12)}…</Text>
+          </View>
+          <View className="flex-row justify-between items-center py-1 border-t border-border">
+            <Text className="text-xs text-gray-400">Status</Text>
+            <View className={`flex-row items-center gap-1.5 px-2 py-0.5 rounded-md ${
+              task.completed ? 'bg-green-50 dark:bg-green-950/50' : 'bg-amber-50 dark:bg-amber-950/50'
+            }`}>
+              <View className={`w-1.5 h-1.5 rounded-full ${task.completed ? 'bg-green-500' : 'bg-amber-400'}`} />
+              <Text className={`text-xs font-semibold ${task.completed ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                {task.completed ? 'Completed' : 'Pending'}
+              </Text>
+            </View>
+          </View>
+          <View className="flex-row justify-between items-center py-1 border-t border-border">
+            <Text className="text-xs text-gray-400">Proof</Text>
+            <View className={`flex-row items-center gap-1.5 px-2 py-0.5 rounded-md ${
+              hasProof ? 'bg-green-50 dark:bg-green-950/50' : 'bg-gray-100 dark:bg-gray-800'
+            }`}>
+              <Ionicons
+                name={hasProof ? 'checkmark-circle' : 'ellipse-outline'}
+                size={11}
+                color={hasProof ? '#22c55e' : '#9ca3af'}
+              />
+              <Text className={`text-xs font-semibold ${hasProof ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}`}>
+                {hasProof ? 'Submitted' : 'Not yet'}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+      </ScrollView>
+
+      {/* ── Assignee Picker Modal ─────────────────────────────────────── */}
+      <Modal
+        visible={assigneeModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAssigneeModalVisible(false)}
+      >
+        <View className="flex-1 bg-black/50 justify-end">
+          <View className="bg-background rounded-t-3xl p-5 pb-10">
+            <View className="flex-row justify-between items-center mb-4">
+              <Text className="text-base font-bold text-gray-800 dark:text-white">Select Assignees</Text>
+              <TouchableOpacity onPress={() => setAssigneeModalVisible(false)}>
+                <Ionicons name="close" size={22} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+
+            {members.length === 0 ? (
+              <View className="items-center py-8">
+                <Ionicons name="people-outline" size={36} color="#9ca3af" />
+                <Text className="text-sm text-gray-400 mt-2">No members in this room</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={members}
+                keyExtractor={(item) => item.id}
+                style={{ maxHeight: 340 }}
+                renderItem={({ item }) => {
+                  const selected = selectedAssignees.includes(item.id);
+                  return (
+                    <TouchableOpacity
+                      onPress={() => toggleAssignee(item.id)}
+                      activeOpacity={0.7}
+                      className={`flex-row items-center gap-3 py-3 px-2 rounded-xl mb-1 ${selected ? 'bg-primary/10' : ''}`}
+                    >
+                      <Avatar name={item.displayName || item.email} size={38} />
+                      <View className="flex-1">
+                        <Text className="text-sm font-semibold text-gray-800 dark:text-white">
+                          {item.displayName || 'Member'}
+                        </Text>
+                        <Text className="text-xs text-gray-400">{item.email}</Text>
+                      </View>
+                      <View className={`w-5 h-5 rounded-full border-2 items-center justify-center ${
+                        selected ? 'bg-primary border-primary' : 'border-gray-300 dark:border-gray-600'
+                      }`}>
+                        {selected && <Ionicons name="checkmark" size={12} color="white" />}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            )}
+
+            <TouchableOpacity
+              onPress={() => setAssigneeModalVisible(false)}
+              activeOpacity={0.7}
+              className="bg-primary rounded-xl py-3 items-center mt-3"
+            >
+              <Text className="text-white font-semibold">
+                Done {selectedAssignees.length > 0 ? `(${selectedAssignees.length} selected)` : ''}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Delete Confirmation Modal ─────────────────────────────────── */}
+      <Modal
+        visible={deleteModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteModalVisible(false)}
+      >
+        <View className="flex-1 bg-black/50 justify-center items-center p-5">
+          <View className="bg-background rounded-2xl p-5 w-full max-w-md">
+            <View className="flex-row items-center gap-3 mb-3">
+              <View className="bg-red-100 dark:bg-red-950 rounded-full p-3">
+                <Ionicons name="trash-outline" size={22} color="#ef4444" />
+              </View>
+              <Text className="text-base font-bold text-gray-800 dark:text-white flex-1">
+                Delete Task?
+              </Text>
+            </View>
+            <Text className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+              "{task.title}" will be permanently deleted. This cannot be undone.
+            </Text>
+            <View className="flex-row gap-2">
+              <TouchableOpacity
+                onPress={() => setDeleteModalVisible(false)}
+                activeOpacity={0.7}
+                className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-xl py-3 items-center"
+              >
+                <Text className="text-gray-800 dark:text-white font-medium">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleDelete}
+                activeOpacity={0.7}
+                className="flex-1 bg-red-500 rounded-xl py-3 items-center"
+              >
+                <Text className="text-white font-medium">Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+    </View>
+  );
+}

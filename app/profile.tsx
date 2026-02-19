@@ -6,7 +6,6 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
-  Image,
   Platform,
   KeyboardAvoidingView,
 } from 'react-native';
@@ -16,21 +15,11 @@ import { useState } from 'react';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { db } from '@/FirebaseConfig';
 import { doc, updateDoc } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '@/hooks/useTheme';
 import type { AuthUser } from '@/context/AuthContext';
-
-const POSITIONS = [
-  'President',
-  'Vice President',
-  'Secretary',
-  'Treasurer',
-  'Auditor',
-  'P.R.O.',
-  'SSC Member',
-  'Adviser',
-];
+import { uploadImage } from '@/utils/upload';
+import { Image } from 'expo-image'
 
 type FieldProps = {
   label: string;
@@ -77,19 +66,18 @@ export default function ProfileScreen() {
   const { user, setUser } = useAuth();
   const { darkMode } = useTheme();
 
-  const [firstname, setFirstname] = useState(user?.firstname ?? '');
-  const [lastname, setLastname] = useState(user?.lastname ?? '');
-  const [position, setPosition] = useState(user?.position ?? '');
-  const [photoUri, setPhotoUri] = useState<string | null>(user?.photo_url ?? null);
+  const [firstname, setFirstname]         = useState(user?.firstname ?? '');
+  const [lastname, setLastname]           = useState(user?.lastname ?? '');
+  const [position, setPosition]           = useState(user?.position ?? '');
+  const [photoUri, setPhotoUri]           = useState<string | null>(user?.photo_url ?? null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [errors, setErrors] = useState<{ firstname?: string; lastname?: string }>({});
-  const [showPositionPicker, setShowPositionPicker] = useState(false);
+  const [saving, setSaving]               = useState(false);
+  const [errors, setErrors]               = useState<{ firstname?: string; lastname?: string; position?: string }>({});
 
   function validate() {
     const e: typeof errors = {};
     if (!firstname.trim()) e.firstname = 'First name is required.';
-    if (!lastname.trim()) e.lastname = 'Last name is required.';
+    if (!lastname.trim())  e.lastname  = 'Last name is required.';
     setErrors(e);
     return Object.keys(e).length === 0;
   }
@@ -113,17 +101,6 @@ export default function ProfileScreen() {
     }
   }
 
-  async function uploadPhoto(localUri: string): Promise<string> {
-    const storage = getStorage();
-    const storageRef = ref(storage, `avatars/${user!.uid}`);
-
-    const response = await fetch(localUri);
-    const blob = await response.blob();
-
-    await uploadBytes(storageRef, blob);
-    return await getDownloadURL(storageRef);
-  }
-
   async function handleSave() {
     if (!validate()) return;
     if (!user?.uid) return;
@@ -132,24 +109,37 @@ export default function ProfileScreen() {
     try {
       let photo_url = user.photo_url ?? null;
 
+      // If a new local image was picked, upload it via utils/upload
       if (photoUri && photoUri !== user.photo_url) {
         setUploadingPhoto(true);
-        photo_url = await uploadPhoto(photoUri);
+        const uploadData = await uploadImage(photoUri);
         setUploadingPhoto(false);
+
+        if (!uploadData?.url) {
+          Alert.alert('Upload failed', 'Could not upload photo. Please try again.');
+          setSaving(false);
+          return;
+        }
+
+        photo_url = uploadData.url;
+        setPhotoUri(photo_url); // swap local uri → remote url
       }
 
       const updates = {
         firstname: firstname.trim(),
-        lastname: lastname.trim(),
-        position: position.trim(),
+        lastname:  lastname.trim(),
+        position:  position.trim(),
         photo_url,
       };
 
+      // Save to Firestore
       await updateDoc(doc(db, 'users', user.uid), updates);
 
+      // Update local auth context so UI reflects immediately
       setUser({ ...user, ...updates } as AuthUser);
 
-    } catch (err) {
+      Alert.alert('Saved', 'Profile updated successfully.');
+    } catch (err: any) {
       console.error('Profile update error:', err);
       Alert.alert('Error', 'Failed to save changes. Please try again.');
     } finally {
@@ -160,9 +150,9 @@ export default function ProfileScreen() {
 
   const isDirty =
     firstname !== user?.firstname ||
-    lastname !== user?.lastname ||
-    position !== user?.position ||
-    photoUri !== user?.photo_url;
+    lastname  !== user?.lastname  ||
+    position  !== user?.position  ||
+    photoUri  !== user?.photo_url;
 
   const initials =
     ((firstname.charAt(0) || user?.firstname?.charAt(0)) ?? 'U').toUpperCase();
@@ -178,6 +168,7 @@ export default function ProfileScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+        {/* ── Header ── */}
         <View className="bg-card pt-14 pb-6 px-5">
           <View className="flex-row items-center justify-between">
             <View className="flex-row items-center gap-3">
@@ -204,16 +195,12 @@ export default function ProfileScreen() {
               activeOpacity={0.8}
               onPress={handleSave}
               disabled={saving || !isDirty}
-              className={`px-4 py-2 rounded-full ${
-                isDirty ? 'bg-primary' : 'bg-background'
-              }`}
+              className={`px-4 py-2 rounded-full ${isDirty ? 'bg-primary' : 'bg-background'}`}
             >
               {saving ? (
                 <ActivityIndicator size="small" color="#ffffff" />
               ) : (
-                <Text
-                  className={`text-sm font-semibold ${isDirty ? 'text-white' : 'text-gray-400'}`}
-                >
+                <Text className={`text-sm font-semibold ${isDirty ? 'text-white' : 'text-gray-400'}`}>
                   Save
                 </Text>
               )}
@@ -222,17 +209,23 @@ export default function ProfileScreen() {
         </View>
 
         <View className="px-5 mt-6 gap-6">
+          {/* ── Avatar picker ── */}
           <View className="items-center gap-3">
             <TouchableOpacity
               activeOpacity={0.8}
+              onPress={handlePickPhoto}  // ← tapping opens picker
               disabled={uploadingPhoto}
               className="relative"
             >
               {photoUri ? (
                 <Image
                   source={{ uri: photoUri }}
-                  className="w-24 h-24 rounded-full"
-                  resizeMode="cover"
+                  style={{
+              width: 80,
+              height: 80,
+              borderRadius: 80
+            }}
+                  contentFit="cover"
                 />
               ) : (
                 <View className="w-24 h-24 rounded-full bg-primary items-center justify-center">
@@ -249,18 +242,18 @@ export default function ProfileScreen() {
               </View>
             </TouchableOpacity>
 
-            <Text className="text-xs text-gray-400">Note: Changing profile image cannot be done this time.</Text>
+            <Text className="text-xs text-gray-400 text-center">
+              Tap the photo to change it
+            </Text>
 
             {photoUri ? (
-              <TouchableOpacity
-                onPress={() => setPhotoUri(null)}
-                activeOpacity={0.7}
-              >
+              <TouchableOpacity onPress={() => setPhotoUri(null)} activeOpacity={0.7}>
                 <Text className="text-xs text-red-500 font-medium">Remove photo</Text>
               </TouchableOpacity>
             ) : null}
           </View>
 
+          {/* ── Account info (read-only) ── */}
           <View className="bg-card rounded-2xl border border-border p-4 gap-3">
             <View className="flex-row items-center gap-2">
               <Ionicons name="information-circle-outline" size={16} color="#9ca3af" />
@@ -288,6 +281,7 @@ export default function ProfileScreen() {
             </View>
           </View>
 
+          {/* ── Editable fields ── */}
           <View className="bg-card rounded-2xl border border-border p-4 gap-4">
             <Field label="First Name" error={errors.firstname}>
               <StyledInput
@@ -316,13 +310,14 @@ export default function ProfileScreen() {
                 value={position}
                 onChangeText={(v) => {
                   setPosition(v);
-                  if (errors.position) setErrors((e) => ({ ...e, lastname: undefined }));
+                  if (errors.position) setErrors((e) => ({ ...e, position: undefined }));
                 }}
                 placeholder="e.g. President"
               />
             </Field>
           </View>
 
+          {/* ── Danger zone ── */}
           <View className="rounded-2xl border border-border overflow-hidden mb-10">
             <View className="px-4 py-3 border-b border-border">
               <Text className="text-xs font-semibold uppercase tracking-widest text-red-400">
